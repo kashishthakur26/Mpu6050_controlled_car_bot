@@ -1,92 +1,139 @@
 #include<ESP8266WiFi.h>
-#include<ESP8266WebServer.h>
+#include<ESP8266HTTPClient.h>
+#include<Wire.h>
 
-IPAddress ip(192,168,4,1);
-IPAddress subnet(255,255,255,0);
-IPAddress gateway(192,168,4,1);
+const char *ssid = "ESPap";
+const char *password = "12345678";
 
-const char *ssid="ESPap";
-const char *password="12345678";
- 
+const uint8_t MPU6050Address = 0x68;
 
-ESP8266WebServer server(80);
+const uint8_t scl = D6;
+const uint8_t sda = D7;
 
-void handleRoot(){
-  server.send(200,"text/html","Welcome To ErodeRTP");
-  digitalWrite(D5,LOW);
-  digitalWrite(D6,LOW); //RIGHT MOTOR
-  
-  digitalWrite(D7,LOW);
-  digitalWrite(D8,LOW); //LEFT MOTOR
+const uint16_t AccelScale = 16384;
+
+const uint8_t SMPRT_DIV         = 0x19;
+const uint8_t CONFIG            = 0x1A;
+const uint8_t GYRO_CONFIG       = 0x1B;
+const uint8_t ACCEL_CONFIG      = 0x1C;
+const uint8_t FIFO_EN           = 0x23;
+const uint8_t INT_ENABLE        = 0x38;
+const uint8_t SIGNAL_PATH_RESET = 0x68;
+const uint8_t USER_CTRL         = 0x6A;
+const uint8_t PWR_MGMT_1        = 0x6B;
+const uint8_t PWR_MGMT_2        = 0x6C;
+
+const uint8_t ACCEL_XOUT_H      = 0x3B;
+
+int16_t AccelX, AccelY;
+
+void I2C_Write(uint8_t deviceAddress, uint8_t regAddress, uint8_t data){
+  Wire.beginTransmission(deviceAddress);
+  Wire.write(regAddress);
+  Wire.write(data);
+  Wire.endTransmission();
 }
 
-void halt(){
-  server.send(200,"text/html","HALT");
-  digitalWrite(D5,LOW);
-  digitalWrite(D6,LOW); //RIGHT MOTOR
-  
-  digitalWrite(D7,LOW);
-  digitalWrite(D8,LOW); //LEFT MOTOR
+void I2C_Read_RawValue(uint8_t deviceAddress, uint8_t regAddress){
+  Wire.beginTransmission(deviceAddress);
+  Wire.write(regAddress);
+  Wire.endTransmission();
+  Wire.requestFrom(deviceAddress, (uint8_t)4);
+
+  AccelX = (((int16_t)Wire.read()<<8) | Wire.read());
+  AccelY = (((int16_t)Wire.read()<<8) | Wire.read());
 }
 
-void forward(){
-  server.send(200,"text/html","FORWARD");
-  digitalWrite(D5,HIGH);
-  digitalWrite(D6,LOW); //RIGHT MOTOR
-  
-  digitalWrite(D7,HIGH);
-  digitalWrite(D8,LOW); //LEFT MOTOR
-}
-
-void backward(){
-  server.send(200,"text/html","BACKWARD");
-  digitalWrite(D5,LOW);
-  digitalWrite(D6,HIGH); //RIGHT MOTOR
-  
-  digitalWrite(D7,LOW);
-  digitalWrite(D8,HIGH); //LEFT MOTOR
-}
-
-void left(){
-  server.send(200,"text/html","LEFT");
-  digitalWrite(D5,HIGH);
-  digitalWrite(D6,LOW); //RIGHT MOTOR
-  
-  digitalWrite(D7,LOW);
-  digitalWrite(D8,HIGH); //LEFT MOTOR
-}
-
-void right(){
-  server.send(200,"text/html","RIGHT");
-  digitalWrite(D5,LOW);
-  digitalWrite(D6,HIGH); //RIGHT MOTOR
-  
-  digitalWrite(D7,HIGH);
-  digitalWrite(D8,LOW); //LEFT MOTOR
+void MPU6050_Init(){
+  I2C_Write(MPU6050Address, SMPRT_DIV, 0x07);
+  I2C_Write(MPU6050Address, CONFIG, 0x00);
+  I2C_Write(MPU6050Address, GYRO_CONFIG, 0x00);
+  I2C_Write(MPU6050Address, ACCEL_CONFIG, 0x00);
+  I2C_Write(MPU6050Address, FIFO_EN, 0x00);
+  I2C_Write(MPU6050Address, INT_ENABLE, 0x00);
+  I2C_Write(MPU6050Address, SIGNAL_PATH_RESET, 0x00);
+  I2C_Write(MPU6050Address, USER_CTRL, 0x00);
+  I2C_Write(MPU6050Address, PWR_MGMT_1, 0x00);
+  I2C_Write(MPU6050Address, PWR_MGMT_2, 0x00);
 }
 
 void setup() {
   // put your setup code here, to run once:
- pinMode(D5,OUTPUT);
- pinMode(D6,OUTPUT);
- pinMode(D7,OUTPUT);
- pinMode(D8,OUTPUT);
- delay(100);
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(D1, OUTPUT);
+  pinMode(D2, OUTPUT);
+  pinMode(D3, OUTPUT);
+  pinMode(D4, OUTPUT);
+  Wire.begin(sda,scl);
+  MPU6050_Init();
 
- WiFi.mode(WIFI_AP);
- WiFi.softAPConfig(ip,gateway,subnet);
- WiFi.softAP(ssid,password);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
 
- server.on("/",handleRoot);
- server.on("/halt",halt);
- server.on("/forward",forward);
- server.on("/backward",backward);
- server.on("/left",left);
- server.on("/right",right);
- server.begin();
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
- server.handleClient();
+  HTTPClient http;
+  double Ax, Ay;
+  I2C_Read_RawValue(MPU6050Address, ACCEL_XOUT_H);
+
+  Ax=(double)AccelX/AccelScale;
+  Ay=(double)AccelY/AccelScale;
+
+  if(Ay < -0.5){
+    delay(100);
+    http.begin("http://192.168.4.1/forward");
+    http.GET();
+    http.end();
+
+    digitalWrite(D1,HIGH);
+    digitalWrite(D2,LOW);
+    digitalWrite(D3,LOW);
+    digitalWrite(D4,LOW);
+  }
+
+  else if(Ay > 0.5){
+    delay(100);
+    http.begin("http://192.168.4.1/backward");
+    http.GET();
+    http.end();
+    digitalWrite(D1,LOW);
+    digitalWrite(D2,HIGH);
+    digitalWrite(D3,LOW);
+    digitalWrite(D4,LOW);
+  }
+
+  else if(Ax > 0.5){
+    delay(100);
+    http.begin("http://192.168.4.1/left");
+    http.GET();
+    http.end();
+    digitalWrite(D1,LOW);
+    digitalWrite(D2,LOW);
+    digitalWrite(D3,HIGH);
+    digitalWrite(D4,LOW);
+  }
+
+  else if(Ax < -0.5){
+    delay(100);
+    http.begin("http://192.168.4.1/right");
+    http.GET();
+    http.end();
+    digitalWrite(D1,LOW);
+    digitalWrite(D2,LOW);
+    digitalWrite(D3,LOW);
+    digitalWrite(D4,HIGH);
+  }
+
+  else{
+    delay(100);
+    http.begin("http://192.168.4.1/halt");
+    http.GET();
+    http.end();
+    digitalWrite(D1,LOW);
+    digitalWrite(D2,LOW);
+    digitalWrite(D3,LOW);
+    digitalWrite(D4,LOW);
+  }
 }
